@@ -11,6 +11,8 @@ from google.oauth2.service_account import Credentials
 
 from bot.config import GOOGLE_CREDENTIALS, SheetsConfig
 
+ACTIVE_DEBT_STATUSES = {"Активен", "Частично"}
+
 
 @dataclass(slots=True)
 class ExpenseEntry:
@@ -130,6 +132,126 @@ class SheetsService:
         for r, c, value in updates:
             ws.update_cell(r, c, value)
         return row
+
+    def add_debt(
+        self,
+        debt_type: str,
+        name: str,
+        amount: float,
+        description: str = "",
+        return_date: str | None = None,
+        note: str = "",
+    ) -> int:
+        ws = self._worksheet(SheetsConfig.JOURNAL_SHEET)
+        row = self._first_empty_row(
+            ws,
+            col=SheetsConfig.J_TYPE_COL,
+            row_start=SheetsConfig.J_START_ROW,
+            row_end=SheetsConfig.J_END_ROW,
+        )
+        if row is None:
+            raise RuntimeError("Журнал долгов переполнен")
+
+        today = datetime.now().strftime("%d.%m.%Y")
+        ws.update_cell(row, SheetsConfig.J_TYPE_COL, debt_type)
+        ws.update_cell(row, SheetsConfig.J_NAME_COL, name)
+        ws.update_cell(row, SheetsConfig.J_DESC_COL, description)
+        ws.update_cell(row, SheetsConfig.J_AMOUNT_COL, amount)
+        ws.update_cell(row, SheetsConfig.J_REC_COL, today)
+        ws.update_cell(row, SheetsConfig.J_RET_COL, return_date or "")
+        ws.update_cell(row, SheetsConfig.J_STATUS_COL, "Активен")
+        ws.update_cell(row, SheetsConfig.J_NOTE_COL, note)
+
+        if debt_type == "Мне должны":
+            self.append_expense(
+                ExpenseEntry(
+                    date=today,
+                    description=f"Выдан займ: {name}",
+                    category="Займ",
+                    amount=amount,
+                    note=description,
+                )
+            )
+        elif debt_type == "Я должен":
+            self.append_income(
+                IncomeEntry(
+                    date=today,
+                    description=f"Получен займ: {name}",
+                    category="Займ",
+                    amount=amount,
+                    note=description,
+                )
+            )
+        return row
+
+    def get_active_debts(self) -> list[dict]:
+        ws = self._worksheet(SheetsConfig.JOURNAL_SHEET)
+        rng = (
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.J_START_ROW, SheetsConfig.J_TYPE_COL)}:"
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.J_END_ROW, SheetsConfig.J_NOTE_COL)}"
+        )
+        rows = ws.get(rng)
+
+        result: list[dict] = []
+        for idx, row in enumerate(rows):
+            row_values = row + [""] * (8 - len(row))
+            debt_type, name, desc, amount, rec_date, ret_date, status, note = row_values[:8]
+            status_value = str(status).strip() or "Активен"
+            if not debt_type or status_value not in ACTIVE_DEBT_STATUSES:
+                continue
+
+            real_row = SheetsConfig.J_START_ROW + idx
+            result.append(
+                {
+                    "index": len(result),
+                    "row": real_row,
+                    "type": str(debt_type),
+                    "name": str(name),
+                    "desc": str(desc),
+                    "amount": float(str(amount).replace(" ", "") or 0),
+                    "record_date": str(rec_date),
+                    "return_date": str(ret_date),
+                    "status": status_value,
+                    "note": str(note),
+                }
+            )
+        return result
+
+    def return_debt_full(self, debt_index: int) -> dict:
+        active = self.get_active_debts()
+        if debt_index < 0 or debt_index >= len(active):
+            raise IndexError("Debt index is out of range")
+
+        debt = active[debt_index]
+        ws = self._worksheet(SheetsConfig.JOURNAL_SHEET)
+        row = debt["row"]
+        amount = float(debt["amount"])
+        today = datetime.now().strftime("%d.%m.%Y")
+
+        ws.update_cell(row, SheetsConfig.J_STATUS_COL, "Возвращён")
+        ws.update_cell(row, SheetsConfig.J_NOTE_COL, f"Полный возврат: {today}")
+
+        if debt["type"] == "Мне должны":
+            self.append_income(
+                IncomeEntry(
+                    date=today,
+                    description=f"Возврат долга: {debt['name']}",
+                    category="Займ",
+                    amount=amount,
+                    note=debt["desc"],
+                )
+            )
+        else:
+            self.append_expense(
+                ExpenseEntry(
+                    date=today,
+                    description=f"Возврат долга: {debt['name']}",
+                    category="Займ",
+                    amount=amount,
+                    note=debt["desc"],
+                )
+            )
+        return debt
 
 
 def normalize_categories(values: Sequence[str]) -> list[str]:
