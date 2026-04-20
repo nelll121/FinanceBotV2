@@ -59,11 +59,7 @@ async def ai_chat_handler(message: Message) -> None:
         return
 
     service = SheetsService(str(user["sheets_id"]))
-    context = {
-        "month_summary": service.get_month_summary(),
-        "active_debts": service.get_active_debts(),
-        "savings_goals": service.get_savings_goals(),
-    }
+    context = service.get_full_context()
 
     history = list(CHAT_HISTORY[user_id])
     response = await get_ai_response(

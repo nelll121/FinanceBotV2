@@ -57,11 +57,7 @@ async def send_morning_summary(bot, user_id: str) -> None:
         return
 
     service = SheetsService(str(user["sheets_id"]))
-    context = {
-        "month_summary": service.get_month_summary(),
-        "active_debts": service.get_active_debts(),
-        "savings_goals": service.get_savings_goals(),
-    }
+    context = service.get_full_context()
     text = await generate_morning_summary(user_id, context)
     await bot.send_message(chat_id=int(user_id), text=f"☀️ Утренняя сводка\n\n{text}")
 
@@ -73,10 +69,6 @@ async def send_evening_summary(bot, user_id: str) -> None:
         return
 
     service = SheetsService(str(user["sheets_id"]))
-    context = {
-        "month_summary": service.get_month_summary(),
-        "active_debts": service.get_active_debts(),
-        "savings_goals": service.get_savings_goals(),
-    }
+    context = service.get_full_context()
     text = await generate_evening_summary(user_id, context)
     await bot.send_message(chat_id=int(user_id), text=f"🌙 Вечерняя сводка\n\n{text}")

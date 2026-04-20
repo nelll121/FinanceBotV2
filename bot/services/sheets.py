@@ -252,7 +252,166 @@ class SheetsService:
                     note=debt["desc"],
                 )
             )
+
+        self.write_return_history(
+            name=debt["name"],
+            debt_type=debt["type"],
+            paid=amount,
+            remain=0,
+            original=amount,
+            return_type="Полный",
+            desc=debt["desc"],
+            record_date=debt["record_date"],
+        )
         return debt
+
+    def write_return_history(
+        self,
+        name: str,
+        debt_type: str,
+        paid: float,
+        remain: float,
+        original: float,
+        return_type: str,
+        desc: str = "",
+        record_date: str = "",
+    ) -> None:
+        ws = self._worksheet(SheetsConfig.HISTORY_SHEET)
+        row = self._first_empty_row(ws, col=1, row_start=2, row_end=500)
+        if row is None:
+            row = 500
+
+        date_val = datetime.now().strftime("%d.%m.%Y")
+        ws.update_cell(row, 1, date_val)
+        ws.update_cell(row, 2, name)
+        ws.update_cell(row, 3, desc)
+        ws.update_cell(row, 4, debt_type)
+        ws.update_cell(row, 5, return_type)
+        ws.update_cell(row, 6, original)
+        ws.update_cell(row, 7, paid)
+        ws.update_cell(row, 8, remain)
+        ws.update_cell(row, 9, record_date)
+
+    def return_debt_partial(self, debt_index: int, paid: float) -> dict:
+        active = self.get_active_debts()
+        if debt_index < 0 or debt_index >= len(active):
+            raise IndexError("Debt index is out of range")
+
+        debt = active[debt_index]
+        original = float(debt["amount"])
+        if paid <= 0 or paid >= original:
+            raise ValueError("Некорректная сумма частичного возврата")
+
+        remain = round(original - paid, 2)
+        today = datetime.now().strftime("%d.%m.%Y")
+
+        ws = self._worksheet(SheetsConfig.JOURNAL_SHEET)
+        row = debt["row"]
+        ws.update_cell(row, SheetsConfig.J_AMOUNT_COL, remain)
+        ws.update_cell(row, SheetsConfig.J_STATUS_COL, "Частично")
+        ws.update_cell(row, SheetsConfig.J_NOTE_COL, f"Частичный возврат {paid} от {today}")
+
+        if debt["type"] == "Мне должны":
+            self.append_income(
+                IncomeEntry(
+                    date=today,
+                    description=f"Частичный возврат долга: {debt['name']}",
+                    category="Займ",
+                    amount=paid,
+                    note=debt["desc"],
+                )
+            )
+        else:
+            self.append_expense(
+                ExpenseEntry(
+                    date=today,
+                    description=f"Частичный возврат долга: {debt['name']}",
+                    category="Займ",
+                    amount=paid,
+                    note=debt["desc"],
+                )
+            )
+
+        self.write_return_history(
+            name=debt["name"],
+            debt_type=debt["type"],
+            paid=paid,
+            remain=remain,
+            original=original,
+            return_type="Частичный",
+            desc=debt["desc"],
+            record_date=debt["record_date"],
+        )
+
+        updated = dict(debt)
+        updated["amount"] = remain
+        updated["status"] = "Частично"
+        return updated
+
+    def get_return_history(self, name: str | None = None) -> list[dict]:
+        ws = self._worksheet(SheetsConfig.HISTORY_SHEET)
+        rows = ws.get("A2:I500")
+        result: list[dict] = []
+        for row in rows:
+            if not row:
+                continue
+            values = row + [""] * (9 - len(row))
+            item = {
+                "return_date": values[0],
+                "name": values[1],
+                "desc": values[2],
+                "type": values[3],
+                "return_type": values[4],
+                "original": values[5],
+                "paid": values[6],
+                "remain": values[7],
+                "record_date": values[8],
+            }
+            if name and str(item["name"]).strip().lower() != name.strip().lower():
+                continue
+            result.append(item)
+        return result
+
+    def get_ai_preferences(self) -> dict[str, str]:
+        ws = self._worksheet(SheetsConfig.SETTINGS_SHEET)
+        rows = ws.get("A3:B20")
+        prefs: dict[str, str] = {}
+        for row in rows:
+            if len(row) < 2:
+                continue
+            key = str(row[0]).strip()
+            val = str(row[1]).strip()
+            if key:
+                prefs[key] = val
+        return prefs
+
+    def save_ai_preference(self, key: str, value: str) -> bool:
+        ws = self._worksheet(SheetsConfig.SETTINGS_SHEET)
+        rows = ws.get("A3:A20")
+        for idx, row in enumerate(rows, start=3):
+            k = row[0].strip() if row else ""
+            if k == key:
+                ws.update_cell(idx, 2, value)
+                return True
+            if not k:
+                ws.update_cell(idx, 1, key)
+                ws.update_cell(idx, 2, value)
+                return True
+        return False
+
+    def clear_ai_preferences(self) -> bool:
+        ws = self._worksheet(SheetsConfig.SETTINGS_SHEET)
+        ws.batch_clear(["A3:B20"])
+        return True
+
+    def get_full_context(self) -> dict:
+        return {
+            "month_summary": self.get_month_summary(),
+            "active_debts": self.get_active_debts(),
+            "savings_goals": self.get_savings_goals(),
+            "recent_returns": self.get_return_history()[-5:],
+            "ai_preferences": self.get_ai_preferences(),
+        }
 
     def get_month_summary(self, month_name: str | None = None) -> dict[str, float | str]:
         month = month_name or self._month_sheet_name()

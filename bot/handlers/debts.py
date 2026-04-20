@@ -199,3 +199,66 @@ async def debt_return_finish(message: Message, state: FSMContext) -> None:
         f"✅ Долг '{debt['name']}' закрыт полностью и записан в ежедневные операции.",
         reply_markup=debts_menu_keyboard(),
     )
+
+
+@router.message(F.text == "💸 Частичный возврат")
+async def debt_partial_start(message: Message, state: FSMContext) -> None:
+    service = _service_from_message(message)
+    if service is None:
+        await message.answer("Сначала завершите /start и подключите таблицу.")
+        return
+
+    debts = service.get_active_debts()
+    if not debts:
+        await message.answer("Активных долгов нет.")
+        return
+
+    lines = ["Введите индекс долга для частичного возврата:"]
+    for debt in debts:
+        lines.append(f"{debt['index']}: {debt['type']} | {debt['name']} | остаток {debt['amount']:.2f}")
+    await state.set_state(DebtStates.partial_index)
+    await message.answer("\n".join(lines), reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(DebtStates.partial_index)
+async def debt_partial_index(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("Нужен числовой индекс из списка.")
+        return
+
+    await state.update_data(partial_index=int(raw))
+    await state.set_state(DebtStates.partial_amount)
+    await message.answer("Введите сумму частичного возврата:")
+
+
+@router.message(DebtStates.partial_amount)
+async def debt_partial_amount(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").replace(" ", "").replace(",", ".")
+    try:
+        paid = float(raw)
+    except ValueError:
+        await message.answer("Некорректная сумма. Введите число.")
+        return
+
+    service = _service_from_message(message)
+    if service is None:
+        await state.clear()
+        await message.answer("Не удалось определить таблицу пользователя.", reply_markup=build_main_keyboard())
+        return
+
+    data = await state.get_data()
+    try:
+        debt = service.return_debt_partial(int(data["partial_index"]), paid)
+    except IndexError:
+        await message.answer("Индекс вне диапазона. Попробуйте снова.")
+        return
+    except ValueError:
+        await message.answer("Сумма должна быть больше 0 и меньше остатка долга.")
+        return
+
+    await state.clear()
+    await message.answer(
+        f"✅ Частичный возврат сохранён. Остаток по долгу '{debt['name']}': {debt['amount']:.2f}",
+        reply_markup=debts_menu_keyboard(),
+    )

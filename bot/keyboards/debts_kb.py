@@ -9,6 +9,7 @@ def debts_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="➕ Новый долг")],
             [KeyboardButton(text="📋 Активные долги")],
             [KeyboardButton(text="✅ Вернуть долг")],
+            [KeyboardButton(text="💸 Частичный возврат")],
             [KeyboardButton(text="⬅️ Назад")],
         ],
         resize_keyboard=True,
