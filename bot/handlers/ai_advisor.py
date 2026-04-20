@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from typing import Deque
+from aiogram.filters import Command
 from bot.keyboards import build_main_keyboard
 from bot.services.ai_service import get_ai_response
 from bot.services.sheets import SheetsService
@@ -11,6 +12,67 @@ from bot.services.users import get_user
 
 CHAT_HISTORY: dict[int, Deque[dict[str, str]]] = defaultdict(lambda: deque(maxlen=10))
 AI_MODE_USERS: set[int] = set()
+
+
+
+@router.message(Command("ai_prefs"))
+async def ai_prefs_show(message: Message) -> None:
+    if message.from_user is None:
+        return
+    user = get_user(message.from_user.id)
+    if user is None or not user.get("sheets_id"):
+        await message.answer("Сначала завершите /start и подключите таблицу.")
+        return
+
+    service = SheetsService(str(user["sheets_id"]))
+    prefs = service.get_ai_preferences()
+    if not prefs:
+        await message.answer("ИИ-предпочтения пока не заданы.")
+        return
+
+    lines = ["⚙️ ИИ-предпочтения:"]
+    for k, v in prefs.items():
+        lines.append(f"• {k}: {v}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("ai_pref"))
+async def ai_prefs_set(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer("Использование: /ai_pref <ключ> <значение>")
+        return
+
+    user = get_user(message.from_user.id)
+    if user is None or not user.get("sheets_id"):
+        await message.answer("Сначала завершите /start и подключите таблицу.")
+        return
+
+    key, value = parts[1], parts[2]
+    service = SheetsService(str(user["sheets_id"]))
+    ok = service.save_ai_preference(key, value)
+    if ok:
+        await message.answer(f"✅ Предпочтение сохранено: {key}={value}")
+    else:
+        await message.answer("Не удалось сохранить предпочтение.")
+
+
+@router.message(Command("ai_pref_clear"))
+async def ai_prefs_clear(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    user = get_user(message.from_user.id)
+    if user is None or not user.get("sheets_id"):
+        await message.answer("Сначала завершите /start и подключите таблицу.")
+        return
+
+    service = SheetsService(str(user["sheets_id"]))
+    service.clear_ai_preferences()
+    await message.answer("✅ ИИ-предпочтения очищены.")
 
     if message.from_user is None:
         return

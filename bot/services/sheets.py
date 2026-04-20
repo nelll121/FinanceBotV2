@@ -404,13 +404,71 @@ class SheetsService:
         ws.batch_clear(["A3:B20"])
         return True
 
+    def get_day_operations(self, date: str) -> dict:
+        """Return day operations by date in YYYY-MM-DD format."""
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        month = self._month_sheet_name(dt)
+        ws = self._worksheet(month)
+
+        target = dt.strftime("%d.%m.%Y")
+
+        expense_range = (
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.EXP_DAILY_START, SheetsConfig.EXP_DATE_COL)}:"
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.EXP_DAILY_END, SheetsConfig.EXP_NOTE_COL)}"
+        )
+        income_range = (
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.INC_DAILY_START, SheetsConfig.INC_DATE_COL)}:"
+            f"{gspread.utils.rowcol_to_a1(SheetsConfig.INC_DAILY_END, SheetsConfig.INC_NOTE_COL)}"
+        )
+
+        expenses_raw = ws.get(expense_range)
+        income_raw = ws.get(income_range)
+
+        expenses: list[dict] = []
+        incomes: list[dict] = []
+
+        for row in expenses_raw:
+            row = row + [""] * (11 - len(row))
+            r_date, desc, cat, amount, note = row[0], row[1], row[6], row[9], row[10]
+            if str(r_date).strip() != target:
+                continue
+            amt = float(str(amount).replace(" ", "").replace(",", ".") or 0)
+            expenses.append({"category": str(cat), "amount": amt, "desc": str(desc), "note": str(note)})
+
+        for row in income_raw:
+            row = row + [""] * (11 - len(row))
+            r_date, desc, cat, amount, note = row[0], row[1], row[6], row[9], row[10]
+            if str(r_date).strip() != target:
+                continue
+            amt = float(str(amount).replace(" ", "").replace(",", ".") or 0)
+            incomes.append({"category": str(cat), "amount": amt, "desc": str(desc), "note": str(note)})
+
+        return {
+            "date": date,
+            "expenses": expenses,
+            "income": incomes,
+            "total_expense": round(sum(x["amount"] for x in expenses), 2),
+            "total_income": round(sum(x["amount"] for x in incomes), 2),
+        }
+
     def get_full_context(self) -> dict:
+        today = datetime.now().date()
+        last_7_days = []
+        for shift in range(7):
+            day = today.fromordinal(today.toordinal() - shift)
+            day_str = day.strftime("%Y-%m-%d")
+            try:
+                last_7_days.append(self.get_day_operations(day_str))
+            except Exception:
+                continue
+
         return {
             "month_summary": self.get_month_summary(),
             "active_debts": self.get_active_debts(),
             "savings_goals": self.get_savings_goals(),
             "recent_returns": self.get_return_history()[-5:],
             "ai_preferences": self.get_ai_preferences(),
+            "last_7_days": last_7_days,
         }
 
     def get_month_summary(self, month_name: str | None = None) -> dict[str, float | str]:
