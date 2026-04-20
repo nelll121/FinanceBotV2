@@ -11,6 +11,7 @@ from loguru import logger
 
 from bot.config import BOT_TOKEN
 from bot.handlers import setup_routers
+from bot.services.scheduler import setup_scheduler
 
 
 async def _set_commands(bot: Bot) -> None:
@@ -32,6 +33,7 @@ async def run() -> None:
     dp.include_router(setup_routers())
 
     await _set_commands(bot)
+    setup_scheduler(bot)
     logger.info("FinanceBot v2 started")
     await dp.start_polling(bot)
 
