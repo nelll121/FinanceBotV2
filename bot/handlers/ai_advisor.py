@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Deque
 from aiogram.filters import Command
+from loguru import logger
 from bot.keyboards import build_main_keyboard
 from bot.services.ai_service import get_ai_response
 from bot.services.sheets import SheetsService
@@ -14,8 +15,6 @@ CHAT_HISTORY: dict[int, Deque[dict[str, str]]] = defaultdict(lambda: deque(maxle
 AI_MODE_USERS: set[int] = set()
 
 
-
-@router.message(Command("ai_prefs"))
 async def ai_prefs_show(message: Message) -> None:
     if message.from_user is None:
         return
@@ -24,8 +23,14 @@ async def ai_prefs_show(message: Message) -> None:
         await message.answer("Сначала завершите /start и подключите таблицу.")
         return
 
-    service = SheetsService(str(user["sheets_id"]))
-    prefs = service.get_ai_preferences()
+    try:
+        service = SheetsService(str(user["sheets_id"]))
+        prefs = service.get_ai_preferences()
+    except Exception as exc:
+        logger.exception("ai_prefs_show failed: {}", exc)
+        await message.answer("Не удалось получить ИИ-предпочтения. Попробуйте позже.")
+        return
+
     if not prefs:
         await message.answer("ИИ-предпочтения пока не заданы.")
         return
@@ -52,8 +57,14 @@ async def ai_prefs_set(message: Message) -> None:
         return
 
     key, value = parts[1], parts[2]
-    service = SheetsService(str(user["sheets_id"]))
-    ok = service.save_ai_preference(key, value)
+    try:
+        service = SheetsService(str(user["sheets_id"]))
+        ok = service.save_ai_preference(key, value)
+    except Exception as exc:
+        logger.exception("ai_prefs_set failed: {}", exc)
+        await message.answer("Не удалось сохранить предпочтение. Попробуйте позже.")
+        return
+
     if ok:
         await message.answer(f"✅ Предпочтение сохранено: {key}={value}")
     else:
@@ -70,9 +81,16 @@ async def ai_prefs_clear(message: Message) -> None:
         await message.answer("Сначала завершите /start и подключите таблицу.")
         return
 
-    service = SheetsService(str(user["sheets_id"]))
-    service.clear_ai_preferences()
+    try:
+        service = SheetsService(str(user["sheets_id"]))
+        service.clear_ai_preferences()
+    except Exception as exc:
+        logger.exception("ai_prefs_clear failed: {}", exc)
+        await message.answer("Не удалось очистить ИИ-предпочтения.")
+        return
+
     await message.answer("✅ ИИ-предпочтения очищены.")
+
 
     if message.from_user is None:
         return
@@ -120,16 +138,21 @@ async def ai_chat_handler(message: Message) -> None:
         await message.answer("Не найдена привязанная таблица. Выполните /start.")
         return
 
-    service = SheetsService(str(user["sheets_id"]))
-    context = service.get_full_context()
+    try:
+        service = SheetsService(str(user["sheets_id"]))
+        context = service.get_full_context()
 
-    history = list(CHAT_HISTORY[user_id])
-    response = await get_ai_response(
-        user_id=user_id,
-        context=context,
-        history=history,
-        message=message.text or "",
-    )
+        history = list(CHAT_HISTORY[user_id])
+        response = await get_ai_response(
+            user_id=user_id,
+            context=context,
+            history=history,
+            message=message.text or "",
+        )
+    except Exception as exc:
+        logger.exception("ai_chat_handler failed for user {}: {}", user_id, exc)
+        await message.answer("Сервис ИИ временно недоступен. Попробуйте позже.")
+        return
 
     CHAT_HISTORY[user_id].append({"role": "user", "content": message.text or ""})
     CHAT_HISTORY[user_id].append({"role": "assistant", "content": response})
