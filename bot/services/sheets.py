@@ -12,6 +12,7 @@ from google.oauth2.service_account import Credentials
 from bot.config import GOOGLE_CREDENTIALS, SheetsConfig
 
 ACTIVE_DEBT_STATUSES = {"Активен", "Частично"}
+SAVINGS_SHEET = "🎯 Цели"
 
 
 @dataclass(slots=True)
@@ -252,6 +253,106 @@ class SheetsService:
                 )
             )
         return debt
+
+    def get_month_summary(self, month_name: str | None = None) -> dict[str, float | str]:
+        month = month_name or self._month_sheet_name()
+        ws = self._worksheet(month)
+
+        income = ws.cell(SheetsConfig.INC_TOTAL_ROW, SheetsConfig.INC_FACT_COL).value or "0"
+        expense = ws.cell(SheetsConfig.EXP_TOTAL_ROW, SheetsConfig.EXP_FACT_COL).value or "0"
+
+        income_value = float(str(income).replace(" ", "").replace(",", ".") or 0)
+        expense_value = float(str(expense).replace(" ", "").replace(",", ".") or 0)
+
+        return {
+            "month": month,
+            "income": income_value,
+            "expense": expense_value,
+            "balance": income_value - expense_value,
+        }
+
+    def _get_or_create_savings_sheet(self) -> gspread.Worksheet:
+        book = self._client.open_by_key(self.spreadsheet_id)
+        try:
+            return book.worksheet(SAVINGS_SHEET)
+        except gspread.WorksheetNotFound:
+            ws = book.add_worksheet(title=SAVINGS_SHEET, rows=200, cols=8)
+            ws.update("A1:E1", [["Название", "Цель", "Накоплено", "%", "Создано"]])
+            return ws
+
+    def get_savings_goals(self) -> list[dict]:
+        ws = self._get_or_create_savings_sheet()
+        values = ws.get("A2:E200")
+
+        goals: list[dict] = []
+        for row in values:
+            padded = row + [""] * (5 - len(row))
+            name, target, current, percent, created = padded[:5]
+            if not str(name).strip():
+                continue
+            goals.append(
+                {
+                    "name": str(name),
+                    "target_amount": float(str(target).replace(" ", "") or 0),
+                    "current_amount": float(str(current).replace(" ", "") or 0),
+                    "percent": float(str(percent).replace("%", "").replace(" ", "") or 0),
+                    "created_at": str(created),
+                }
+            )
+        return goals
+
+    def add_savings_goal(self, name: str, target_amount: float) -> int:
+        ws = self._get_or_create_savings_sheet()
+        row = self._first_empty_row(ws, col=1, row_start=2, row_end=200)
+        if row is None:
+            raise RuntimeError("Лист целей заполнен")
+
+        created = datetime.now().strftime("%d.%m.%Y")
+        ws.update_cell(row, 1, name)
+        ws.update_cell(row, 2, target_amount)
+        ws.update_cell(row, 3, 0)
+        ws.update_cell(row, 4, 0)
+        ws.update_cell(row, 5, created)
+        return row
+
+    def update_savings_goal(self, goal_name: str, add_amount: float) -> dict:
+        ws = self._get_or_create_savings_sheet()
+        values = ws.get("A2:E200")
+
+        for idx, row in enumerate(values, start=2):
+            if not row:
+                continue
+            name = str(row[0]).strip()
+            if name != goal_name:
+                continue
+
+            target = float(str(row[1]).replace(" ", "") or 0) if len(row) > 1 else 0.0
+            current = float(str(row[2]).replace(" ", "") or 0) if len(row) > 2 else 0.0
+            new_current = current + add_amount
+            percent = (new_current / target * 100) if target > 0 else 0
+
+            ws.update_cell(idx, 3, new_current)
+            ws.update_cell(idx, 4, round(percent, 2))
+
+            today = datetime.now().strftime("%d.%m.%Y")
+            self.append_expense(
+                ExpenseEntry(
+                    date=today,
+                    description=f"Пополнение цели: {goal_name}",
+                    category="Накопления",
+                    amount=add_amount,
+                    note="",
+                )
+            )
+
+            return {
+                "name": goal_name,
+                "target_amount": target,
+                "current_amount": new_current,
+                "percent": round(percent, 2),
+            }
+
+        raise ValueError("Цель не найдена")
 
 
 def normalize_categories(values: Sequence[str]) -> list[str]:
